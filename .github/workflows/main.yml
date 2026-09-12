@@ -1,4 +1,5 @@
 name: Install Java 25 from Oracle Website
+
 on:
   workflow_dispatch:
 
