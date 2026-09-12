@@ -1,17 +1,16 @@
-name: Manual Install Java 25 from Oracle
-
+name: Install Java 25 from Oracle Website
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-11-arm
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Manual Download and Setup from Oracle Website
+      - name: Download and Setup from Oracle Website
         shell: powershell
         run: |
           $url = "https://download.oracle.com/java/25/latest/jdk-25_windows-x64_bin.zip"
