@@ -1,38 +1,22 @@
-name: Install Java 25 from Oracle Website
-
-on:
-  workflow_dispatch:
+name: Verify Java 21 and 23 Architecture
+on: [push]
 
 jobs:
-  build:
+  verify-java:
     runs-on: windows-11-arm
-
+    strategy:
+      matrix:
+        java-version: ['21', '23']
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Set up Java ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java-version }}
 
-      - name: Download and Setup from Oracle Website
-        shell: powershell
-        run: |
-          $url = "https://download.oracle.com/java/25/latest/jdk-25_windows-x64_bin.zip"
-          $zipPath = "$env:TEMP\jdk-25.zip"
-          $installDir = "C:\Program Files\Java"
-
-          Write-Host "Downloading archive directly from Oracle..."
-          Invoke-WebRequest -Uri $url -OutFile $zipPath
-
-          Write-Host "Extracting files to $installDir..."
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
-
-          $jdkFolder = Get-ChildItem -Path $installDir -Filter "jdk-25*" | Select-Object -ExpandProperty FullName | Select-Object -First 1
-          Write-Host "Resolved JDK path: $jdkFolder"
-
-          echo "JAVA_HOME=$jdkFolder" >> $env:GITHUB_ENV
-          echo "$jdkFolder\bin" >> $env:GITHUB_PATH
-
-      - name: Verify Java Setup
-        shell: powershell
+      - name: Check Java version and architecture
+        shell: pwsh
         run: |
           java -version
-          javac -version
+          Write-Host "Detected OS Architecture:"
+          java -XshowSettings:properties -version 2>&1 | Select-String "os.arch"
