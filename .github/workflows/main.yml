@@ -1,0 +1,22 @@
+name: Verify Java 21 and 23 Architecture
+on: [push]
+
+jobs:
+  verify-java:
+    runs-on: windows-11-arm64
+    strategy:
+      matrix:
+        java-version: ['21', '23']
+    steps:
+      - name: Set up Java ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java-version }}
+
+      - name: Check Java version and architecture
+        shell: pwsh
+        run: |
+          java -version
+          Write-Host "Detected OS Architecture:"
+          java -XshowSettings:properties -version 2>&1 | Select-String "os.arch"
