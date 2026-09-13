@@ -1,33 +1,51 @@
-name: Install Java 25 from Oracle Website
+name: Android CMake ARM Toolset Workflow
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  verify-toolset:
     runs-on: windows-11-arm
 
+    env:
+      TOOL_CONFIG: |
+        {
+          "addons": [],
+          "additional_tools": [
+            "cmake;3.22.1",
+            "cmake;3.31.5",
+            "cmake;4.1.2"
+          ]
+        }
+
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download and Setup from Oracle Website
-        shell: powershell
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Load Config and Install CMake Tools
         run: |
-          $url = "https://download.oracle.com/java/25/latest/jdk-25_windows-x64_bin.zip"
-          $zipPath = "$env:TEMP\jdk-25.zip"
-          $installDir = "C:\Program Files\Java"
-          Write-Host "Downloading archive directly from Oracle..."
-          Invoke-WebRequest -Uri $url -OutFile $zipPath
-          Write-Host "Extracting files to $installDir..."
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
-          $jdkFolder = Get-ChildItem -Path $installDir -Filter "jdk-25*" | Select-Object -ExpandProperty FullName | Select-Object -First 1
-          Write-Host "Resolved JDK path: $jdkFolder"
-          echo "JAVA_HOME=$jdkFolder" >> $env:GITHUB_ENV
-          echo "$jdkFolder\bin" >> $env:GITHUB_PATH
-      - name: Verify Java Setup
-        shell: powershell
+          Write-Host "Loading configuration payload:"
+          Write-Host "$env:TOOL_CONFIG"
+          
+          cmd /c "yes | sdkmanager --licenses"
+          sdkmanager "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2"
+        shell: pwsh
+
+      - name: Verify CMake Installations
         run: |
-          java -version
-          javac -version
+          Write-Host "=== Verifying CMake 3.22.1 ==="
+          & "$env:ANDROID_HOME\cmake\3.22.1\bin\cmake.exe" --version
+
+          Write-Host "=== Verifying CMake 3.31.5 ==="
+          & "$env:ANDROID_HOME\cmake\3.31.5\bin\cmake.exe" --version
+
+          Write-Host "=== Verifying CMake 4.1.2 ==="
+          if (Test-Path "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe") {
+              & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
+          } else {
+              Write-Host "CMake 4.1.2 path not found in standard Android SDK location."
+          }
+        shell: pwsh
