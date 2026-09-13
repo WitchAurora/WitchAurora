@@ -1,3 +1,4 @@
+```yaml
 name: Android CMake ARM Toolset Workflow
 
 on:
@@ -19,29 +20,57 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install CMake Tools via sdkmanager
+      - name: Download CMake Tools from Kitware
         run: |
-          $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
-          $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
-          if (-not (Test-Path $sdkManagerPath)) {
-              $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\16.0\bin\sdkmanager.bat"
+          $versions = @("3.22.1", "3.31.5", "4.1.2")
+          foreach ($v in $versions) {
+              $cmakeDir = "$env:ANDROID_HOME\cmake\$v"
+              Write-Host "=== Downloading CMake $v from Kitware ==="
+              
+              # CMake 3.24+ provides native Windows ARM64 binaries; older versions use x86_64 emulated via WoW64
+              $arch = "windows-arm64"
+              if ($v -eq "3.22.1") {
+                  $arch = "windows-x86_64"
+              }
+              
+              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-$arch.zip"
+              $zipPath = "$env:TEMP\cmake-$v.zip"
+              
+              try {
+                  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                  Invoke-WebRequest -Uri $url -OutFile $zipPath
+                  
+                  if (Test-Path $cmakeDir) {
+                      Remove-Item $cmakeDir -Recurse -Force
+                  }
+                  New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
+                  
+                  Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\cmake-temp-$v" -Force
+                  $extractedFolder = Get-ChildItem "$env:TEMP\cmake-temp-$v" | Select-Object -ExpandProperty FullName
+                  Copy-Item "$extractedFolder\*" -Destination $cmakeDir -Recurse -Force
+                  
+                  Remove-Item $zipPath -ErrorAction SilentlyContinue
+                  Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
+                  Write-Host "Successfully installed CMake $v."
+              } catch {
+                  Write-Host "Primary architecture asset failed for $v, attempting x86_64 fallback..."
+                  $fallbackUrl = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip"
+                  Invoke-WebRequest -Uri $fallbackUrl -OutFile $zipPath
+                  
+                  if (Test-Path $cmakeDir) {
+                      Remove-Item $cmakeDir -Recurse -Force
+                  }
+                  New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
+                  
+                  Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\cmake-temp-$v" -Force
+                  $extractedFolder = Get-ChildItem "$env:TEMP\cmake-temp-$v" | Select-Object -ExpandProperty FullName
+                  Copy-Item "$extractedFolder\*" -Destination $cmakeDir -Recurse -Force
+                  
+                  Remove-Item $zipPath -ErrorAction SilentlyContinue
+                  Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
+                  Write-Host "Successfully installed CMake $v via x86_64 fallback."
+              }
           }
-
-          Write-Host "Accepting SDK licenses..."
-          $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-          $processInfo.FileName = "cmd.exe"
-          $processInfo.RedirectStandardInput = $true
-          $processInfo.UseShellExecute = $false
-          $processInfo.Arguments = "/c `"$sdkManagerPath`" --licenses"
-          
-          $p = [System.Diagnostics.Process]::Start($processInfo)
-          $p.StandardInput.WriteLine(($y="y`n") * 30)
-          $p.StandardInput.Close()
-          $p.WaitForExit()
-
-          Write-Host "Installing packages..."
-          & "$sdkManagerPath" "cmake;3.22.1" --include_obs
-          & "$sdkManagerPath" "cmake;3.31.5" "cmake;4.1.2" --channel=3
         shell: pwsh
 
       - name: Verify CMake Installations
@@ -55,3 +84,5 @@ jobs:
           Write-Host "=== Verifying CMake 4.1.2 ==="
           & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
         shell: pwsh
+
+```
