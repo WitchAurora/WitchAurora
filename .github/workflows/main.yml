@@ -39,10 +39,9 @@ jobs:
           $p.StandardInput.Close()
           $p.WaitForExit()
 
-          Write-Host "Installing packages individually..."
-          & "$sdkManagerPath" "cmake;3.22.1" --channel=3
-          & "$sdkManagerPath" "cmake;3.31.5" --channel=3
-          & "$sdkManagerPath" "cmake;4.1.2" --channel=3
+          Write-Host "Installing packages..."
+          & "$sdkManagerPath" "cmake;3.22.1" --include_obs
+          & "$sdkManagerPath" "cmake;3.31.5" "cmake;4.1.2" --channel=3
         shell: pwsh
 
       - name: Verify CMake Installations
