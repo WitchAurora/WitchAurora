@@ -13,7 +13,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Update SDK Tools and Install All CMake Versions
+      - name: Install CMake Tools via sdkmanager
         run: |
           $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
           $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
@@ -25,11 +25,9 @@ jobs:
           $yesInput = "y`n" * 20
           $yesInput | & $sdkManagerPath --licenses
 
-          Write-Host "Updating command-line tools to support newer package metadata..."
-          $yesInput | & $sdkManagerPath --update
-
-          Write-Host "Installing CMake 3.22.1, 3.31.5, and 4.1.2 via sdkmanager..."
-          & $sdkManagerPath "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2"
+          Write-Host "Installing packages with --channel=3..."
+          & $sdkManagerPath "emulator" --channel=3
+          & $sdkManagerPath "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2" --channel=3
         shell: pwsh
 
       - name: Verify CMake Installations
