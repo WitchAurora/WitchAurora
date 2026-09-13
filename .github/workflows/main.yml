@@ -19,27 +19,29 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-      - name: Load Config and Install CMake Tools
+
+      - name: Load Config and Install CMake Tools via sdkmanager
         run: |
           Write-Host "Loading configuration payload:"
           Write-Host "$env:TOOL_CONFIG"
           
-          # Fix: Replace Unix 'yes' command with a PowerShell loop to accept SDK licenses
-          $sdkManager = "sdkmanager"
-          if (Get-Command "sdkmanager" -ErrorAction SilentlyContinue) {
-              foreach ($i in 1..20) { "y" } | & $sdkManager --licenses
-              & $sdkManager "cmake;3.22.1" "cmake;3.31.5"
-              try {
-                  & $sdkManager "cmake;4.1.2"
-              } catch {
-                  Write-Host "Note: cmake;4.1.2 package installation encountered an issue or requires a specific channel."
-              }
-          } else {
-              throw "sdkmanager could not be found in the system PATH."
+          $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
+          $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
+          if (-not (Test-Path $sdkManagerPath)) {
+              $sdkManagerPath = "sdkmanager"
           }
+
+          Write-Host "Accepting SDK licenses..."
+          $yesInput = "y`n" * 15
+          $yesInput | & $sdkManagerPath --licenses
+
+          Write-Host "Installing all CMake versions via sdkmanager..."
+          & $sdkManagerPath "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2"
         shell: pwsh
+
       - name: Verify CMake Installations
         run: |
           Write-Host "=== Verifying CMake 3.22.1 ==="
