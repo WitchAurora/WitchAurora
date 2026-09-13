@@ -83,5 +83,3 @@ jobs:
           Write-Host "=== Verifying CMake 4.1.2 ==="
           & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
         shell: pwsh
-
-```
