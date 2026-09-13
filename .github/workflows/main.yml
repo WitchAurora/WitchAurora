@@ -18,7 +18,7 @@ jobs:
           $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
           $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
           if (-not (Test-Path $sdkManagerPath)) {
-              $sdkManagerPath = "sdkmanager"
+            $sdkManagerPath = "sdkmanager"
           }
 
           Write-Host "Accepting SDK licenses..."
@@ -26,7 +26,6 @@ jobs:
           $yesInput | & $sdkManagerPath --licenses
 
           Write-Host "Installing packages with --channel=3..."
-          & $sdkManagerPath "emulator" --channel=3
           & $sdkManagerPath "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2" --channel=3
         shell: pwsh
 
