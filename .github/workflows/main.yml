@@ -1,22 +1,67 @@
-name: Verify Raw Pre-Installed Java Architecture
+name: Setup Windows 11 ARM64 JDK
 
-on: [push, workflow_dispatch]
+on:
+  workflow_dispatch: 
 
 jobs:
-  verify-native-env:
-    runs-on: windows-11-arm  # Or use 'windows-11-vs2026-arm'
+  build:
+    
+    runs-on: windows-11-arm
+
     steps:
-      - name: Inspect Pre-installed Environment
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'SilentlyContinue'
-          
-          Write-Host "==== Runner Environment ===="
-          Write-Host "Runner Architecture: $env:RUNNER_ARCH"
-          Write-Host "Default JAVA_HOME Path: $env:JAVA_HOME"
-          
-          Write-Host "`n==== Executing Java Architecture Probe ===="
-          $output = (& "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1) | Out-String
-          $output -split "`r`n" | Select-String "os.arch|sun.arch.data.model"
-          
-          exit 0
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Fetch and Install Native Windows ARM64 JDK
+      shell: powershell
+      run: |
+        # 1. Define configuration variables
+        $JDKVersion  = "25"         # Target Java version
+        $Architecture = "aarch64"   # Adoptium API architecture term
+        $OS           = "windows"
+        $ImageType    = "jdk"
+
+        Write-Host "Querying Adoptium API for Native ARM64 Binaries..."
+
+        # 2. Call the official Adoptium v3 API binary endpoint
+        $Uri = "https://api.adoptium.net/v3/binary/latest/$JDKVersion/ga/$OS/$Architecture/$ImageType/hotspot/normal/eclipse"
+        
+        # Invoke-RestMethod follows redirects by default for the direct binary stream, 
+        # or we can query the assets endpoint. Alternatively, fetch headers/response info:
+        $WebRequest = Invoke-WebRequest -Uri $Uri -MaximumRedirection 0 -ErrorAction SilentlyContinue
+        
+        # The API redirects directly to the binary file asset or returns the file stream
+        if ($WebRequest.StatusCode -eq 302 -or $WebRequest.StatusCode -eq 301) {
+            $AssetUrl = $WebRequest.Headers.Location
+        } else {
+            $AssetUrl = $Uri
+        }
+
+        # Extract filename from URL or fallback
+        $FileName = [System.IO.Path]::GetFileName($AssetUrl.Split("?")[0])
+        if (-not $FileName.EndsWith(".zip")) { $FileName = "openjdk-jdk.zip" }
+
+        Write-Host "Found Native ARM64 Download: $AssetUrl"
+
+        # 3. Download Zip package
+        Write-Host "Downloading $FileName..."
+        Invoke-WebRequest -Uri $AssetUrl -OutFile $FileName
+
+        # 4. Extract to user profile path
+        Write-Host "Extracting archive to local runner..."
+        $ExtractPath = "$env:USERPROFILE\JavaARM"
+        Expand-Archive -Path $FileName -DestinationPath $ExtractPath -Force
+
+        # 5. Locate root JDK directory and bind variables
+        $JavaHome = Get-ChildItem -Path $ExtractPath -Directory | Select-Object -First 1
+        $FullJavaHomePath = $JavaHome.FullName
+
+        Write-Host "Setting native paths to: $FullJavaHomePath"
+        
+        # Output directly to GitHub Actions context handlers
+        Echo "JAVA_HOME=$FullJavaHomePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Echo "$FullJavaHomePath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Verify Architecture and Version
+      run: |
+        java -version
