@@ -14,4 +14,4 @@ jobs:
           echo "Default JAVA_HOME Path: $env:JAVA_HOME"
           
           echo "`n==== Executing Java Architecture Probe ===="
-          & "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1 | Select-String "os.arch|sun.arch.data.model"
+          (& "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version) 2>&1 | Select-String "os.arch|sun.arch.data.model"
