@@ -1,67 +1,70 @@
-name: Setup Windows 11 ARM64 JDK
+name: Android CMake ARM Toolset Workflow
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
-  build:
-    
+  verify-toolset:
     runs-on: windows-11-arm
-
     steps:
-    - name: Check out repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Fetch and Install Native Windows ARM64 JDK
-      shell: powershell
-      run: |
-        # 1. Define configuration variables
-        $JDKVersion  = "25"         # Target Java version
-        $Architecture = "aarch64"   # Adoptium API architecture term
-        $OS           = "windows"
-        $ImageType    = "jdk"
+      - name: Setup Java SDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
 
-        Write-Host "Querying Adoptium API for Native ARM64 Binaries..."
+      - name: Set up Android Environment Variables
+        run: |
+          $androidHome = "$env:USERPROFILE\AppData\Local\Android\Sdk"
+          echo "ANDROID_HOME=$androidHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "ANDROID_SDK_ROOT=$androidHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Force -Path "$androidHome\cmake" | Out-Null
+        shell: pwsh
 
-        # 2. Call the official Adoptium v3 API binary endpoint
-        $Uri = "https://api.adoptium.net/v3/binary/latest/$JDKVersion/ga/$OS/$Architecture/$ImageType/hotspot/normal/eclipse"
-        
-        # Invoke-RestMethod follows redirects by default for the direct binary stream, 
-        # or we can query the assets endpoint. Alternatively, fetch headers/response info:
-        $WebRequest = Invoke-WebRequest -Uri $Uri -MaximumRedirection 0 -ErrorAction SilentlyContinue
-        
-        # The API redirects directly to the binary file asset or returns the file stream
-        if ($WebRequest.StatusCode -eq 302 -or $WebRequest.StatusCode -eq 301) {
-            $AssetUrl = $WebRequest.Headers.Location
-        } else {
-            $AssetUrl = $Uri
-        }
+      - name: Download CMake Tools from Kitware
+        run: |
+          $versions = @("3.22.1", "3.31.5", "4.1.2")
+          foreach ($v in $versions) {
+              $cmakeDir = "$env:ANDROID_HOME\cmake\$v"
+              Write-Host "=== Downloading CMake $v from Kitware ==="
+              
+              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip"
+              $zipPath = "$env:TEMP\cmake-$v.zip"
+              
+              try {
+                  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                  Invoke-WebRequest -Uri $url -OutFile $zipPath
+                  
+                  if (Test-Path $cmakeDir) {
+                      Remove-Item $cmakeDir -Recurse -Force
+                  }
+                  New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
+                  
+                  Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\cmake-temp-$v" -Force
+                  $extractedFolder = Get-ChildItem "$env:TEMP\cmake-temp-$v" | Select-Object -ExpandProperty FullName
+                  Copy-Item "$extractedFolder\*" -Destination $cmakeDir -Recurse -Force
+                  
+                  Remove-Item $zipPath -ErrorAction SilentlyContinue
+                  Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
+                  Write-Host "Successfully installed CMake $v."
+              } catch {
+                  Write-Host "Failed to download CMake ${v}: $_"
+                  exit 1
+              }
+          }
+        shell: pwsh
 
-        # Extract filename from URL or fallback
-        $FileName = [System.IO.Path]::GetFileName($AssetUrl.Split("?")[0])
-        if (-not $FileName.EndsWith(".zip")) { $FileName = "openjdk-jdk.zip" }
-
-        Write-Host "Found Native ARM64 Download: $AssetUrl"
-
-        # 3. Download Zip package
-        Write-Host "Downloading $FileName..."
-        Invoke-WebRequest -Uri $AssetUrl -OutFile $FileName
-
-        # 4. Extract to user profile path
-        Write-Host "Extracting archive to local runner..."
-        $ExtractPath = "$env:USERPROFILE\JavaARM"
-        Expand-Archive -Path $FileName -DestinationPath $ExtractPath -Force
-
-        # 5. Locate root JDK directory and bind variables
-        $JavaHome = Get-ChildItem -Path $ExtractPath -Directory | Select-Object -First 1
-        $FullJavaHomePath = $JavaHome.FullName
-
-        Write-Host "Setting native paths to: $FullJavaHomePath"
-        
-        # Output directly to GitHub Actions context handlers
-        Echo "JAVA_HOME=$FullJavaHomePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        Echo "$FullJavaHomePath\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Verify Architecture and Version
-      run: |
-        java -version
+      - name: Verify CMake Installations
+        run: |
+          Write-Host "=== Verifying CMake 3.22.1 ==="
+          & "$env:ANDROID_HOME\cmake\3.22.1\bin\cmake.exe" --version
+          
+          Write-Host "=== Verifying CMake 3.31.5 ==="
+          & "$env:ANDROID_HOME\cmake\3.31.5\bin\cmake.exe" --version
+          
+          Write-Host "=== Verifying CMake 4.1.2 ==="
+          & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
+        shell: pwsh
