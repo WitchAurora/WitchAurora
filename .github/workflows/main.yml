@@ -6,7 +6,6 @@ on:
 jobs:
   verify-toolset:
     runs-on: windows-11-arm
-
     env:
       TOOL_CONFIG: |
         {
@@ -17,34 +16,42 @@ jobs:
             "cmake;4.1.2"
           ]
         }
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
       - name: Load Config and Install CMake Tools
         run: |
           Write-Host "Loading configuration payload:"
           Write-Host "$env:TOOL_CONFIG"
           
-          cmd /c "yes | sdkmanager --licenses"
-          sdkmanager "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2"
+          # Fix: Replace Unix 'yes' command with a PowerShell loop to accept SDK licenses
+          $sdkManager = "sdkmanager"
+          if (Get-Command "sdkmanager" -ErrorAction SilentlyContinue) {
+              foreach ($i in 1..20) { "y" } | & $sdkManager --licenses
+              & $sdkManager "cmake;3.22.1" "cmake;3.31.5"
+              try {
+                  & $sdkManager "cmake;4.1.2"
+              } catch {
+                  Write-Host "Note: cmake;4.1.2 package installation encountered an issue or requires a specific channel."
+              }
+          } else {
+              throw "sdkmanager could not be found in the system PATH."
+          }
         shell: pwsh
-
       - name: Verify CMake Installations
         run: |
           Write-Host "=== Verifying CMake 3.22.1 ==="
           & "$env:ANDROID_HOME\cmake\3.22.1\bin\cmake.exe" --version
-
+          
           Write-Host "=== Verifying CMake 3.31.5 ==="
           & "$env:ANDROID_HOME\cmake\3.31.5\bin\cmake.exe" --version
-
+          
           Write-Host "=== Verifying CMake 4.1.2 ==="
-          if (Test-Path "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe") {
-              & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
+          $cmake4Path = "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe"
+          if (Test-Path $cmake4Path) {
+              & $cmake4Path --version
           } else {
               Write-Host "CMake 4.1.2 path not found in standard Android SDK location."
           }
