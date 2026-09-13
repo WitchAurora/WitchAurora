@@ -7,6 +7,7 @@ jobs:
     runs-on: windows-11-arm  # Or use 'windows-11-vs2026-arm'
     steps:
       - name: Inspect Pre-installed Environment
+        shell: powershell
         run: |
           echo "==== Runner Environment ===="
           echo "Runner Architecture: $env:RUNNER_ARCH"
@@ -14,4 +15,3 @@ jobs:
           
           echo "`n==== Executing Java Architecture Probe ===="
           & "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1 | Select-String "os.arch|sun.arch.data.model"
-        shell: powershell
