@@ -10,6 +10,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Setup Java SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -18,7 +24,7 @@ jobs:
           $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
           $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
           if (-not (Test-Path $sdkManagerPath)) {
-            $sdkManagerPath = "sdkmanager"
+              $sdkManagerPath = "sdkmanager"
           }
 
           Write-Host "Accepting SDK licenses..."
