@@ -11,13 +11,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 25
+      - name: Set up Java 25 (Azul Zulu)
         uses: actions/setup-java@v5
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'
           java-version: '25'
           architecture: 'aarch64'
-          check-latest: true
 
       - name: Verify Java Architecture and Version
         run: |
