@@ -16,8 +16,13 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android Environment Variables
+        run: |
+          $androidHome = "$env:USERPROFILE\AppData\Local\Android\Sdk"
+          echo "ANDROID_HOME=$androidHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "ANDROID_SDK_ROOT=$androidHome" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Force -Path "$androidHome\cmake" | Out-Null
+        shell: pwsh
 
       - name: Download CMake Tools from Kitware
         run: |
@@ -26,13 +31,7 @@ jobs:
               $cmakeDir = "$env:ANDROID_HOME\cmake\$v"
               Write-Host "=== Downloading CMake $v from Kitware ==="
               
-              # CMake 3.24+ provides native Windows ARM64 binaries; older versions use x86_64 emulated via WoW64
-              $arch = "windows-arm64"
-              if ($v -eq "3.22.1") {
-                  $arch = "windows-x86_64"
-              }
-              
-              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-$arch.zip"
+              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip"
               $zipPath = "$env:TEMP\cmake-$v.zip"
               
               try {
@@ -52,22 +51,8 @@ jobs:
                   Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
                   Write-Host "Successfully installed CMake $v."
               } catch {
-                  Write-Host "Primary architecture asset failed for $v, attempting x86_64 fallback..."
-                  $fallbackUrl = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip"
-                  Invoke-WebRequest -Uri $fallbackUrl -OutFile $zipPath
-                  
-                  if (Test-Path $cmakeDir) {
-                      Remove-Item $cmakeDir -Recurse -Force
-                  }
-                  New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
-                  
-                  Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\cmake-temp-$v" -Force
-                  $extractedFolder = Get-ChildItem "$env:TEMP\cmake-temp-$v" | Select-Object -ExpandProperty FullName
-                  Copy-Item "$extractedFolder\*" -Destination $cmakeDir -Recurse -Force
-                  
-                  Remove-Item $zipPath -ErrorAction SilentlyContinue
-                  Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
-                  Write-Host "Successfully installed CMake $v via x86_64 fallback."
+                  Write-Host "Failed to download CMake $v: $_"
+                  exit 1
               }
           }
         shell: pwsh
