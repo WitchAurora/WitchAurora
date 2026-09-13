@@ -11,12 +11,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 25 (ARM64)
+      - name: Set up Java 25
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '25'
           architecture: 'aarch64'
+          check-latest: true
 
       - name: Verify Java Architecture and Version
         run: |
