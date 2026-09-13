@@ -16,7 +16,7 @@ jobs:
           Write-Host "Default JAVA_HOME Path: $env:JAVA_HOME"
           
           Write-Host "`n==== Executing Java Architecture Probe ===="
-          $output = & "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1
-          $output | Select-String "os.arch|sun.arch.data.model"
+          $output = (& "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1) | Out-String
+          $output -split "`r`n" | Select-String "os.arch|sun.arch.data.model"
           
           exit 0
