@@ -6,16 +6,6 @@ on:
 jobs:
   verify-toolset:
     runs-on: windows-11-arm
-    env:
-      TOOL_CONFIG: |
-        {
-          "addons": [],
-          "additional_tools": [
-            "cmake;3.22.1",
-            "cmake;3.31.5",
-            "cmake;4.1.2"
-          ]
-        }
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -23,11 +13,8 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Load Config and Install CMake Tools via sdkmanager
+      - name: Update SDK Tools and Install All CMake Versions
         run: |
-          Write-Host "Loading configuration payload:"
-          Write-Host "$env:TOOL_CONFIG"
-          
           $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
           $sdkManagerPath = "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat"
           if (-not (Test-Path $sdkManagerPath)) {
@@ -35,10 +22,13 @@ jobs:
           }
 
           Write-Host "Accepting SDK licenses..."
-          $yesInput = "y`n" * 15
+          $yesInput = "y`n" * 20
           $yesInput | & $sdkManagerPath --licenses
 
-          Write-Host "Installing all CMake versions via sdkmanager..."
+          Write-Host "Updating command-line tools to support newer package metadata..."
+          $yesInput | & $sdkManagerPath --update
+
+          Write-Host "Installing CMake 3.22.1, 3.31.5, and 4.1.2 via sdkmanager..."
           & $sdkManagerPath "cmake;3.22.1" "cmake;3.31.5" "cmake;4.1.2"
         shell: pwsh
 
@@ -51,10 +41,5 @@ jobs:
           & "$env:ANDROID_HOME\cmake\3.31.5\bin\cmake.exe" --version
           
           Write-Host "=== Verifying CMake 4.1.2 ==="
-          $cmake4Path = "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe"
-          if (Test-Path $cmake4Path) {
-              & $cmake4Path --version
-          } else {
-              Write-Host "CMake 4.1.2 path not found in standard Android SDK location."
-          }
+          & "$env:ANDROID_HOME\cmake\4.1.2\bin\cmake.exe" --version
         shell: pwsh
