@@ -9,9 +9,14 @@ jobs:
       - name: Inspect Pre-installed Environment
         shell: powershell
         run: |
-          echo "==== Runner Environment ===="
-          echo "Runner Architecture: $env:RUNNER_ARCH"
-          echo "Default JAVA_HOME Path: $env:JAVA_HOME"
+          $ErrorActionPreference = 'SilentlyContinue'
           
-          echo "`n==== Executing Java Architecture Probe ===="
-          (& "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version) 2>&1 | Select-String "os.arch|sun.arch.data.model"
+          Write-Host "==== Runner Environment ===="
+          Write-Host "Runner Architecture: $env:RUNNER_ARCH"
+          Write-Host "Default JAVA_HOME Path: $env:JAVA_HOME"
+          
+          Write-Host "`n==== Executing Java Architecture Probe ===="
+          $output = & "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1
+          $output | Select-String "os.arch|sun.arch.data.model"
+          
+          exit 0
