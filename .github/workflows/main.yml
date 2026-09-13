@@ -24,15 +24,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$androidHome\cmake" | Out-Null
         shell: pwsh
 
-      - name: Download CMake Tools from Kitware
+      - name: Download Native ARM64 CMake Tools from Kitware
         run: |
-          $versions = @("3.22.1", "3.31.5", "4.1.2")
+          $versions = @("3.30.5", "3.31.5", "4.1.2")
           foreach ($v in $versions) {
               $cmakeDir = "$env:ANDROID_HOME\cmake\$v"
-              Write-Host "=== Downloading CMake $v from Kitware ==="
+              Write-Host "=== Downloading native ARM64 CMake $v from Kitware ==="
               
-              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip"
-              $zipPath = "$env:TEMP\cmake-$v.zip"
+              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-arm64.zip"
+              $zipPath = "$env:TEMP\cmake-$v-arm64.zip"
               
               try {
                   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -49,9 +49,9 @@ jobs:
                   
                   Remove-Item $zipPath -ErrorAction SilentlyContinue
                   Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
-                  Write-Host "Successfully installed CMake $v."
+                  Write-Host "Successfully installed native ARM64 CMake $v."
               } catch {
-                  Write-Host "Failed to download CMake ${v}: $_"
+                  Write-Host "Failed to download native ARM64 CMake ${v}: $_"
                   exit 1
               }
           }
@@ -59,8 +59,8 @@ jobs:
 
       - name: Verify CMake Installations
         run: |
-          Write-Host "=== Verifying CMake 3.22.1 ==="
-          & "$env:ANDROID_HOME\cmake\3.22.1\bin\cmake.exe" --version
+          Write-Host "=== Verifying CMake 3.30.5 ==="
+          & "$env:ANDROID_HOME\cmake\3.30.5\bin\cmake.exe" --version
           
           Write-Host "=== Verifying CMake 3.31.5 ==="
           & "$env:ANDROID_HOME\cmake\3.31.5\bin\cmake.exe" --version
