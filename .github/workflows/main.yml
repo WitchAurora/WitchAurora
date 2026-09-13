@@ -51,7 +51,7 @@ jobs:
                   Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -ErrorAction SilentlyContinue
                   Write-Host "Successfully installed CMake $v."
               } catch {
-                  Write-Host "Failed to download CMake $v: $_"
+                  Write-Host "Failed to download CMake ${v}: $_"
                   exit 1
               }
           }
