@@ -1,33 +1,17 @@
-name: Install Java 25 from Oracle Website
+name: Verify Raw Pre-Installed Java Architecture
 
-on:
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
-  build:
-    runs-on: windows-11-arm
-
+  verify-native-env:
+    runs-on: windows-11-arm  # Or use 'windows-11-vs2026-arm'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download and Setup from Oracle Website
-        shell: powershell
+      - name: Inspect Pre-installed Environment
         run: |
-          $url = "https://download.oracle.com/java/25/latest/jdk-25_windows-x64_bin.zip"
-          $zipPath = "$env:TEMP\jdk-25.zip"
-          $installDir = "C:\Program Files\Java"
-          Write-Host "Downloading archive directly from Oracle..."
-          Invoke-WebRequest -Uri $url -OutFile $zipPath
-          Write-Host "Extracting files to $installDir..."
-          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-          Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
-          $jdkFolder = Get-ChildItem -Path $installDir -Filter "jdk-25*" | Select-Object -ExpandProperty FullName | Select-Object -First 1
-          Write-Host "Resolved JDK path: $jdkFolder"
-          echo "JAVA_HOME=$jdkFolder" >> $env:GITHUB_ENV
-          echo "$jdkFolder\bin" >> $env:GITHUB_PATH
-      - name: Verify Java Setup
+          echo "==== Runner Environment ===="
+          echo "Runner Architecture: $env:RUNNER_ARCH"
+          echo "Default JAVA_HOME Path: $env:JAVA_HOME"
+          
+          echo "`n==== Executing Java Architecture Probe ===="
+          & "$env:JAVA_HOME\bin\java.exe" -XshowSettings:properties -version 2>&1 | Select-String "os.arch|sun.arch.data.model"
         shell: powershell
-        run: |
-          java -version
-          javac -version
