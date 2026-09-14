@@ -1,4 +1,4 @@
-name: Direct Repro Issue 14728
+name: Ultimate Repro Issue 14728
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   run-repro:
     runs-on: windows-11-arm
     steps:
-      - name: Direct TrustedPublisher Test
+      - name: Hardened TrustedPublisher Test
         shell: pwsh
         run: |
           $code = @"
@@ -18,8 +18,16 @@ jobs:
           public class ReproTester {
               public static void Execute() {
                   try {
-                      Console.WriteLine("--- Phase 1: Creating In-Memory Certificate ---");
-                      using (RSA rsa = RSA.Create(2048)) {
+                      Console.WriteLine("--- Phase 1: Creating OS-Backed Key Container ---");
+                      
+                      // On force la création des clés dans le stockage persistant de Windows (CNG)
+                      CngKeyCreationParameters keyParams = new CngKeyCreationParameters {
+                          Provider = CngProvider.MicrosoftSoftwareKeyStorageProvider,
+                          KeyCreationOptions = CngKeyCreationOptions.OverwriteExistingKey
+                      };
+                      
+                      using (CngKey cngKey = CngKey.Create(CngAlgorithm.Rsa, "ReproKey14728", keyParams))
+                      using (RSA rsa = new RSACng(cngKey)) {
                           var request = new CertificateRequest(
                               "CN=Authenticode Repro Publisher",
                               rsa,
@@ -35,9 +43,9 @@ jobs:
                               DateTimeOffset.UtcNow.AddDays(-1),
                               DateTimeOffset.UtcNow.AddYears(1));
 
-                          Console.WriteLine($"[OK] Certificate generated. Thumbprint: {cert.Thumbprint}");
+                          Console.WriteLine($"[OK] OS-Backed Certificate generated. Thumbprint: {cert.Thumbprint}");
 
-                          Console.WriteLine("\n--- Phase 3: Direct Target Bug Operation ---");
+                          Console.WriteLine("\n--- Phase 2: Direct Target Bug Operation ---");
                           Console.WriteLine("Opening CurrentUser\\TrustedPublisher as ReadWrite...");
                           
                           using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
@@ -63,8 +71,5 @@ jobs:
           }
           "@
 
-          # Fast in-memory compilation
           Add-Type -TypeDefinition $code -Language CSharp
-          
-          # Run the direct test
           [ReproTester]::Execute()
