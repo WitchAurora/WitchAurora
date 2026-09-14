@@ -1,75 +1,35 @@
-name: Ultimate Repro Issue 14728
+name: Reinstall Homebrew Workflow
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 jobs:
-  run-repro:
-    runs-on: windows-11-arm
+  reinstall-brew:
+    runs-on: macos-26-intel
+    
     steps:
-      - name: Hardened TrustedPublisher Test
-        shell: pwsh
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Uninstall existing Homebrew
         run: |
-          $code = @"
-          using System;
-          using System.Security.Cryptography;
-          using System.Security.Cryptography.X509Certificates;
+          echo "Running official Homebrew uninstaller..."
+          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"
 
-          public class ReproTester {
-              public static void Execute() {
-                  try {
-                      Console.WriteLine("--- Phase 1: Creating OS-Backed Key Container ---");
-                      
-                      // On force la création des clés dans le stockage persistant de Windows (CNG)
-                      CngKeyCreationParameters keyParams = new CngKeyCreationParameters {
-                          Provider = CngProvider.MicrosoftSoftwareKeyStorageProvider,
-                          KeyCreationOptions = CngKeyCreationOptions.OverwriteExistingKey
-                      };
-                      
-                      using (CngKey cngKey = CngKey.Create(CngAlgorithm.Rsa, "ReproKey14728", keyParams))
-                      using (RSA rsa = new RSACng(cngKey)) {
-                          var request = new CertificateRequest(
-                              "CN=Authenticode Repro Publisher",
-                              rsa,
-                              HashAlgorithmName.SHA256,
-                              RSASignaturePadding.Pkcs1);
+      - name: Clean up residual files
+        run: |
+          echo "Purging leftover directories..."
+          sudo rm -rf /usr/local/Homebrew /usr/local/Caskroom /usr/local/Cellar /usr/local/var/homebrew
+          sudo rm -rf /opt/homebrew/* # Just in case runner has remnants
 
-                          request.CertificateExtensions.Add(
-                              new X509EnhancedKeyUsageExtension(
-                                  new OidCollection { new Oid("1.3.6.1.5.5.7.3.3") }, 
-                                  false));
+      - name: Install latest Homebrew
+        run: |
+          echo "Installing latest Homebrew..."
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-                          X509Certificate2 cert = request.CreateSelfSigned(
-                              DateTimeOffset.UtcNow.AddDays(-1),
-                              DateTimeOffset.UtcNow.AddYears(1));
-
-                          Console.WriteLine($"[OK] OS-Backed Certificate generated. Thumbprint: {cert.Thumbprint}");
-
-                          Console.WriteLine("\n--- Phase 2: Direct Target Bug Operation ---");
-                          Console.WriteLine("Opening CurrentUser\\TrustedPublisher as ReadWrite...");
-                          
-                          using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
-                              pubStore.Open(OpenFlags.ReadWrite);
-                              Console.WriteLine("[OK] Store opened. Invoking pubStore.Add()...");
-                              
-                              pubStore.Add(cert);
-                              Console.WriteLine("\n[RESULT] SUCCESS: Certificate written. Bug was NOT reproduced.");
-                          }
-                      }
-                  }
-                  catch (Exception ex) {
-                      Console.WriteLine("\n================================================");
-                      Console.WriteLine("!!! BUG REPRODUCTION DETECTED !!!");
-                      Console.WriteLine("================================================");
-                      Console.WriteLine(ex.ToString());
-                      
-                      if (ex.HResult == unchecked((int)0x80070005)) {
-                          Console.WriteLine("\nVerified Native Error Code: 0x80070005 (Access is Denied).");
-                      }
-                  }
-              }
-          }
-          "@
-
-          Add-Type -TypeDefinition $code -Language CSharp
-          [ReproTester]::Execute()
+      - name: Verify installation
+        run: |
+          # Add brew to PATH for runner shell session
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH || echo "/usr/local/bin" >> $GITHUB_PATH
+          brew --version
+          brew update
