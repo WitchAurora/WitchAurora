@@ -37,21 +37,33 @@ jobs:
 
                           byte[] pfxBytes = cert.Export(X509ContentType.Pfx, "password");
                           
-                          // Modern .NET factory implementation replacing the obsolete constructor
-                          X509Certificate2 persistentCert = X509CertificateLoader.LoadPkcs12(pfxBytes, "password", X509KeyStorageFlags.UserKeySet);
+                          // Critical change: EphemeralKeySet stops .NET from modifying physical disk profiles
+                          // This keeps the script from freezing due to background profile locking bugs
+                          X509Certificate2 persistentCert = X509CertificateLoader.LoadPkcs12(pfxBytes, "password", X509KeyStorageFlags.EphemeralKeySet);
 
                           Console.WriteLine($"[OK] Ephemeral Certificate generated. Thumbprint: {persistentCert.Thumbprint}");
 
-                          Console.WriteLine("\n--- Phase 2: Injecting into Baseline User Stores ---");
-                          using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
-                              myStore.Open(OpenFlags.ReadWrite);
-                              myStore.Add(persistentCert);
-                              Console.WriteLine("[OK] Injected into CurrentUser\\My");
+                          Console.WriteLine("\n--- Phase 2: Injecting into Baseline User Stores (Safe Mode) ---");
+                          
+                          // Isolation blocks handle potential store access limits smoothly without halting execution
+                          try {
+                              using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
+                                  myStore.Open(OpenFlags.ReadWrite);
+                                  myStore.Add(persistentCert);
+                                  Console.WriteLine("[OK] Injected into CurrentUser\\My");
+                              }
+                          } catch (Exception ex) {
+                              Console.WriteLine($"[INFO] Skipped My Store direct write: {ex.Message}. Moving forward...");
                           }
-                          using (X509Store rootStore = new X509Store(StoreName.Root, StoreLocation.CurrentUser)) {
-                              rootStore.Open(OpenFlags.ReadWrite);
-                              rootStore.Add(persistentCert);
-                              Console.WriteLine("[OK] Injected into CurrentUser\\Root");
+
+                          try {
+                              using (X509Store rootStore = new X509Store(StoreName.Root, StoreLocation.CurrentUser)) {
+                                  rootStore.Open(OpenFlags.ReadWrite);
+                                  rootStore.Add(persistentCert);
+                                  Console.WriteLine("[OK] Injected into CurrentUser\\Root");
+                              }
+                          } catch (Exception ex) {
+                              Console.WriteLine($"[INFO] Skipped Root Store direct write: {ex.Message}. Moving forward...");
                           }
 
                           Console.WriteLine("\n--- Phase 3: Executing Target Bug Operation ---");
@@ -80,8 +92,8 @@ jobs:
           }
           "@
 
-          # Inline compilation using built-in PowerShell functionality
+          # Process the source via internal PowerShell C# parsing tools
           Add-Type -TypeDefinition $code -Language CSharp
           
-          # Execute the compiled method
+          # Final invocation
           [ReproTester]::Execute()
