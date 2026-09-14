@@ -1,41 +1,30 @@
-name: Download CMake
+name: Diagnostic PowerShell Image
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch] # Permet le déclenchement manuel depuis l'onglet Actions
 
 jobs:
-  download-cmake:
-    runs-on: windows-latest
+  check-powershell:
+    runs-on: windows-2025 # Cible l'image Windows Server 2025
+
     steps:
-      - name: Download Native ARM64 CMake Tools from Kitware
-        run: |
-          $versions = @("3.30.5", "3.31.5", "4.1.2")
-          foreach ($v in $versions) {
-              $cmakeDir = "$env:ANDROID_HOME\cmake\$v"
-              Write-Host "=== Downloading native ARM64 CMake $v from Kitware ==="
-                            
-              $url = "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-arm64.zip"
-              $zipPath = "$env:TEMP\cmake-$v-arm64.zip"
-                            
-              try {
-                  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                  Invoke-WebRequest -Uri $url -OutFile $zipPath
-                                    
-                  if (Test-Path $cmakeDir) {
-                      Remove-Item $cmakeDir -Recurse -Force
-                  }
-                  New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
-                                    
-                  Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\cmake-temp-$v" -Force
-                  $extractedFolder = Get-ChildItem "$env:TEMP\cmake-temp-$v" | Select-Object -ExpandProperty FullName
-                  Copy-Item "$extractedFolder\*" -Destination $cmakeDir -Recurse -Force
-                                    
-                  Remove-Item $zipPath -ErrorAction SilentlyContinue
-                  Remove-Item "$env:TEMP\cmake-temp-$v" -Recurse -Force
-                  Write-Host "Successfully installed native ARM64 CMake $v."
-              } catch {
-                  Write-Host "Failed to download native ARM64 CMake ${v}: $_"
-                  exit 1
-              }
-          }
+      - name: 'Étape 1 : Vérification de la version active'
         shell: pwsh
+        run: |
+          Write-Host "=== Version système par défaut ==="
+          $PSVersionTable
+          
+          Write-Host "`n=== Version brute de pwsh ==="
+          pwsh --version
+
+      - name: 'Étape 2 : Inspection des dossiers système'
+        shell: pwsh
+        run: |
+          Write-Host "=== Emplacement du binaire ==="
+          Get-Command pwsh | Select-Object Name, Source
+          
+          Write-Host "`n=== Versions sur le disque (C:\Program Files\PowerShell) ==="
+          if (Test-Path "C:\Program Files\PowerShell") {
+              Get-ChildItem "C:\Program Files\PowerShell" | Select-Object Name, FullName
+          } else {
+              Write-Warning "Le dossier C:\Program Files\PowerShell est introuvable."
+          }
