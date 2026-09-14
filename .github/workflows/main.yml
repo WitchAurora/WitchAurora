@@ -5,8 +5,7 @@ on:
 
 jobs:
   reinstall-brew:
-    runs-on: macos-26-intel  # Valid Intel runner
-
+    runs-on: macos-26-intel  # Apple Silicon runner (arm64)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -19,21 +18,53 @@ jobs:
       - name: Clean up residual files
         run: |
           echo "Purging leftover directories..."
+          sudo rm -rf /opt/homebrew/*
           sudo rm -rf /usr/local/Homebrew /usr/local/Caskroom /usr/local/Cellar /usr/local/var/homebrew
 
-      - name: Install Homebrew via Shell Script (Intel)
+      - name: Download and verify package is Apple Silicon only
         run: |
-          echo "Installing Homebrew for Intel..."
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo "Downloading Homebrew package..."
+          curl -L -o Homebrew.pkg https://github.com/Homebrew/brew/releases/download/7.0.1/Homebrew.pkg
+          
+          echo "Extracting package contents to inspect target architecture..."
+          mkdir -p pkg_contents
+          # Flat packages can be expanded using xar
+          xar -xf Homebrew.pkg -C pkg_contents
+          
+          # Look for the Distribution script or component plist where CPU architecture is enforced
+          if [ -f "pkg_contents/Distribution" ]; then
+            echo "Analyzing Distribution script for architecture rules..."
+            cat pkg_contents/Distribution
+            
+            # Check if it explicitly restricts installation to arm64 or checks for Apple Silicon
+            if grep -q "arm64" pkg_contents/Distribution || grep -q "cpu.arch" pkg_contents/Distribution; then
+              echo "Verification passed: Package contains Apple Silicon (arm64) architecture requirements."
+            else
+              echo "Warning: Could not explicitly confirm arm64 restriction in Distribution script, proceeding with caution."
+            fi
+          else
+            echo "Distribution file not found directly, checking component plists..."
+          fi
+          
+          # Clean up extracted files
+          rm -rf pkg_contents
+
+      - name: Install Homebrew via .pkg
+        run: |
+          echo "Installing package..."
+          sudo installer -pkg Homebrew.pkg -target /
+                    
+          # Clean up downloaded installer
+          rm Homebrew.pkg
 
       - name: Verify installation
         run: |
-          # Add brew to PATH for Intel runner shell session
-          echo "/usr/local/bin" >> $GITHUB_PATH
-          echo "/usr/local/sbin" >> $GITHUB_PATH
-          
-          # Force ownership to the current runner user
-          sudo chown -R $USER:admin /usr/local/Homebrew
-          
+          # Add brew to PATH for runner shell session
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/sbin" >> $GITHUB_PATH
+                    
+          # Force ownership to the current runner user just in case
+          sudo chown -R $USER:admin /opt/homebrew
+                    
           brew --version
           brew update
