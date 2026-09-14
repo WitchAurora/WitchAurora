@@ -1,4 +1,4 @@
-name: Fixed Repro Issue 14728
+name: Direct Repro Issue 14728
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   run-repro:
     runs-on: windows-11-arm
     steps:
-      - name: Single-Step Headless Repro Test
+      - name: Direct TrustedPublisher Test
         shell: pwsh
         run: |
           $code = @"
@@ -18,7 +18,7 @@ jobs:
           public class ReproTester {
               public static void Execute() {
                   try {
-                      Console.WriteLine("--- Phase 1: Creating Pure In-Memory Key Pair ---");
+                      Console.WriteLine("--- Phase 1: Creating In-Memory Certificate ---");
                       using (RSA rsa = RSA.Create(2048)) {
                           var request = new CertificateRequest(
                               "CN=Authenticode Repro Publisher",
@@ -35,46 +35,17 @@ jobs:
                               DateTimeOffset.UtcNow.AddDays(-1),
                               DateTimeOffset.UtcNow.AddYears(1));
 
-                          byte[] pfxBytes = cert.Export(X509ContentType.Pfx, "password");
-                          
-                          // Critical change: EphemeralKeySet stops .NET from modifying physical disk profiles
-                          // This keeps the script from freezing due to background profile locking bugs
-                          X509Certificate2 persistentCert = X509CertificateLoader.LoadPkcs12(pfxBytes, "password", X509KeyStorageFlags.EphemeralKeySet);
+                          Console.WriteLine($"[OK] Certificate generated. Thumbprint: {cert.Thumbprint}");
 
-                          Console.WriteLine($"[OK] Ephemeral Certificate generated. Thumbprint: {persistentCert.Thumbprint}");
-
-                          Console.WriteLine("\n--- Phase 2: Injecting into Baseline User Stores (Safe Mode) ---");
-                          
-                          // Isolation blocks handle potential store access limits smoothly without halting execution
-                          try {
-                              using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
-                                  myStore.Open(OpenFlags.ReadWrite);
-                                  myStore.Add(persistentCert);
-                                  Console.WriteLine("[OK] Injected into CurrentUser\\My");
-                              }
-                          } catch (Exception ex) {
-                              Console.WriteLine($"[INFO] Skipped My Store direct write: {ex.Message}. Moving forward...");
-                          }
-
-                          try {
-                              using (X509Store rootStore = new X509Store(StoreName.Root, StoreLocation.CurrentUser)) {
-                                  rootStore.Open(OpenFlags.ReadWrite);
-                                  rootStore.Add(persistentCert);
-                                  Console.WriteLine("[OK] Injected into CurrentUser\\Root");
-                              }
-                          } catch (Exception ex) {
-                              Console.WriteLine($"[INFO] Skipped Root Store direct write: {ex.Message}. Moving forward...");
-                          }
-
-                          Console.WriteLine("\n--- Phase 3: Executing Target Bug Operation ---");
+                          Console.WriteLine("\n--- Phase 3: Direct Target Bug Operation ---");
                           Console.WriteLine("Opening CurrentUser\\TrustedPublisher as ReadWrite...");
+                          
                           using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
                               pubStore.Open(OpenFlags.ReadWrite);
+                              Console.WriteLine("[OK] Store opened. Invoking pubStore.Add()...");
                               
-                              Console.WriteLine("Invoking pubStore.Add()...");
-                              pubStore.Add(persistentCert);
-                              
-                              Console.WriteLine("\n[RESULT] SUCCESS: Certificate was successfully written. Bug was NOT reproduced.");
+                              pubStore.Add(cert);
+                              Console.WriteLine("\n[RESULT] SUCCESS: Certificate written. Bug was NOT reproduced.");
                           }
                       }
                   }
@@ -92,8 +63,8 @@ jobs:
           }
           "@
 
-          # Process the source via internal PowerShell C# parsing tools
+          # Fast in-memory compilation
           Add-Type -TypeDefinition $code -Language CSharp
           
-          # Final invocation
+          # Run the direct test
           [ReproTester]::Execute()
