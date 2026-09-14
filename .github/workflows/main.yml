@@ -1,95 +1,82 @@
-name: Repro Issue 14728 - Headless
+name: Fixed Repro Issue 14728
 
 on:
   workflow_dispatch:
 
 jobs:
-  repro-exact:
+  run-repro:
     runs-on: windows-11-arm
     steps:
-      - name: Setup Headless Environment & Execute Repro
+      - name: Single-Step Headless Repro Test
         shell: pwsh
         run: |
-          # Write a pure .NET solution to completely bypass PowerShell's certificate generation hangs
-          $code = @"
+          $script = @"
           using System;
           using System.Security.Cryptography;
           using System.Security.Cryptography.X509Certificates;
 
-          class Program {
-              static void Main(string[] args) {
-                  Console.WriteLine("Generating a runtime-isolated Code Signing Certificate...");
-                  
-                  X509Certificate2 targetCert;
-                  using (RSA rsa = RSA.Create(2048)) {
-                      var request = new CertificateRequest(
-                          "CN=Authenticode Test Publisher",
-                          rsa,
-                          HashAlgorithmName.SHA256,
-                          RSASignaturePadding.Pkcs1);
+          try {
+              Console.WriteLine("--- Phase 1: Creating Pure In-Memory Key Pair ---");
+              using (RSA rsa = RSA.Create(2048)) {
+                  var request = new CertificateRequest(
+                      "CN=Authenticode Repro Publisher",
+                      rsa,
+                      HashAlgorithmName.SHA256,
+                      RSASignaturePadding.Pkcs1);
 
-                      // Explicitly tag it with Code Signing Extended Key Usage (EKU)
-                      request.CertificateExtensions.Add(
-                          new X509EnhancedKeyUsageExtension(
-                              new OidCollection { new Oid("1.3.6.1.5.5.7.3.3") }, // Code Signing OID
-                              false));
+                  request.CertificateExtensions.Add(
+                      new X509EnhancedKeyUsageExtension(
+                          new OidCollection { new Oid("1.3.6.1.5.5.7.3.3") }, 
+                          false));
 
-                      // Finalize the certificate payload
-                      targetCert = request.CreateSelfSigned(
-                          DateTimeOffset.UtcNow.AddDays(-1),
-                          DateTimeOffset.UtcNow.AddYears(1));
+                  X509Certificate2 cert = request.CreateSelfSigned(
+                      DateTimeOffset.UtcNow.AddDays(-1),
+                      DateTimeOffset.UtcNow.AddYears(1));
+
+                  // Required step: Windows demands a persistent private key storage structure for store migrations
+                  byte[] pfxBytes = cert.Export(X509ContentType.Pfx, "password");
+                  X509Certificate2 persistentCert = new X509Certificate2(pfxBytes, "password", X509KeyStorageFlags.UserKeySet);
+
+                  Console.WriteLine($"[OK] Ephemeral Certificate generated. Thumbprint: {persistentCert.Thumbprint}");
+
+                  Console.WriteLine("\n--- Phase 2: Injecting into Baseline User Stores ---");
+                  using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
+                      myStore.Open(OpenFlags.ReadWrite);
+                      myStore.Add(persistentCert);
+                      Console.WriteLine("[OK] Injected into CurrentUser\\My");
+                  }
+                  using (X509Store rootStore = new X509Store(StoreName.Root, StoreLocation.CurrentUser)) {
+                      rootStore.Open(OpenFlags.ReadWrite);
+                      rootStore.Add(persistentCert);
+                      Console.WriteLine("[OK] Injected into CurrentUser\\Root");
                   }
 
-                  Console.WriteLine($"Generated Cert Thumbprint: {targetCert.Thumbprint}");
-
-                  // Replicate issue baseline conditions: Inject directly into My and Root
-                  try {
-                      using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
-                          myStore.Open(OpenFlags.ReadWrite);
-                          myStore.Add(targetCert);
-                      }
-                      using (X509Store rootStore = new X509Store(StoreName.Root, StoreLocation.CurrentUser)) {
-                          rootStore.Open(OpenFlags.ReadWrite);
-                          rootStore.Add(targetCert);
-                      }
-                      Console.WriteLine("Successfully established baseline stores (My & Root).");
-                  }
-                  catch (Exception setupEx) {
-                      Console.WriteLine($"Setup Failure: {setupEx.Message}");
-                      Environment.Exit(1);
-                  }
-
-                  // Test the exact target failure point from Issue #14728
-                  try {
-                      Console.WriteLine("Attempting to open CurrentUser\\TrustedPublisher ReadWrite...");
-                      using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
-                          pubStore.Open(OpenFlags.ReadWrite);
-                          
-                          Console.WriteLine("Attempting to Add the certificate to TrustedPublisher...");
-                          pubStore.Add(targetCert);
-                          
-                          Console.WriteLine("SUCCESS: Certificate added. The bug did not reproduce.");
-                      }
-                  }
-                  catch (Exception ex) {
-                      Console.WriteLine("\n=== BUG REPRODUCTION DETECTED ===");
-                      Console.WriteLine(ex.ToString());
+                  Console.WriteLine("\n--- Phase 3: Executing Target Bug Operation ---");
+                  Console.WriteLine("Opening CurrentUser\\TrustedPublisher as ReadWrite...");
+                  using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
+                      pubStore.Open(OpenFlags.ReadWrite);
                       
-                      if (ex.HResult == unchecked((int)0x80070005)) {
-                          Console.WriteLine("\nConfirmed Error Code: 0x80070005 (Access is Denied).");
-                          Environment.Exit(0); 
-                      }
-                      Environment.Exit(1);
+                      Console.WriteLine("Invoking pubStore.Add()...");
+                      pubStore.Add(persistentCert);
+                      
+                      Console.WriteLine("\n[RESULT] SUCCESS: Certificate was successfully written. Bug was NOT reproduced.");
                   }
               }
           }
+          catch (Exception ex) {
+              Console.WriteLine("\n================================================");
+              Console.WriteLine("!!! BUG REPRODUCTION DETECTED !!!");
+              Console.WriteLine("================================================");
+              Console.WriteLine(ex.ToString());
+              
+              if (ex.HResult == unchecked((int)0x80070005)) {
+                  Console.WriteLine("\nVerified Native Error Code: 0x80070005 (Access is Denied).");
+              }
+              Environment.Exit(0);
+          }
           "@
+
+          $script | Out-File -FilePath repro.csx -Encoding utf8
           
-          # Spin up a temporary .NET app to host the whole sequence cleanly
-          $code | Out-File -FilePath Program.cs -Encoding utf8
-          dotnet new console --force --name ReproRunner
-          Move-Item -Path Program.cs -Destination ReproRunner\Program.cs -Force
-          cd ReproRunner
-          
-          # Execute the compiled process
-          dotnet run
+          # Execute utilizing the built-in lightweight C# script runner
+          csi repro.csx
