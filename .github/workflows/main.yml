@@ -1,81 +1,52 @@
-name: Repro Issue 14728 (TrustedPublisher Add Error)
+name: Repro Issue 14728
 
 on:
-  workflow_dispatch: # Allows you to manually trigger the test from the GitHub Actions UI
+  workflow_dispatch: # Allows manual triggering for testing
 
 jobs:
   reproduce-error:
-    # Strictly targets the specific test image identified in the issue
-    runs-on: windows-11-arm 
-
+    runs-on: windows-11-arm
     steps:
-      - name: Check Environment Context
+      - name: Attempt X509Store.Add to CurrentUser TrustedPublisher
         shell: pwsh
         run: |
-          Write-Host "=== System Information ===" -ForegroundColor Cyan
-          Write-Host "OS Caption: $((Get-WmiObject Win32_OperatingSystem).Caption)"
-          Write-Host "Architecture: $env:PROCESSOR_ARCHITECTURE"
-          Write-Host "PowerShell Version: $PSVersionTable.PSVersion"
-          Write-Host ".NET Runtime Version: $(dotnet --version 2>$null || echo 'Not installed/Not found')"
+          # 1. Create a transient self-signed certificate in memory
+          Write-Host "Creating a transient self-signed certificate..."
+          $cert = New-SelfSignedCertificate -Subject "CN=Repro14728" -CertStoreLocation "Cert:\CurrentUser\My"
           
-          # Verify High Integrity / Admin rights matching runneradmin context
-          $isAdmin = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          Write-Host "Running with Elevated Administrator Privileges: $isAdmin" -ForegroundColor ($isAdmin ? "Green" : "Red")
-
-      - name: Run .NET X509Store Mutation Test
-        shell: pwsh
-        run: |
-          Write-Host "=== Beginning Mutation Test ===" -ForegroundColor Cyan
+          # 2. Open the CurrentUser TrustedPublisher store with ReadWrite permissions
+          Write-Host "Opening X509Store (TrustedPublisher, CurrentUser) in ReadWrite mode..."
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+              [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          )
           
-          # 1. Generate an in-memory dummy self-signed certificate
-          $cert = New-SelfSignedCertificate -Subject "CN=ReproBug14728" -CertStoreLocation "Cert:\CurrentUser\My"
-          Write-Host "Temporary Certificate Generated: $($cert.Thumbprint)"
-          
-          # 2. Attempt programmatic initialization and write behavior via official .NET APIs
           try {
-              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                  [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
-                  [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
-              )
-              
-              Write-Host "Opening CurrentUser/TrustedPublisher store in ReadWrite mode..."
               $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
               
-              Write-Host "Attempting to add the certificate to the store..."
+              # 3. Attempt to add the certificate to reproduce the 0x80070005 Access Denied error
+              Write-Host "Attempting to add the certificate..."
               $store.Add($cert)
               
-              Write-Host "SUCCESS: Certificate mutated into store. The bug did not manifest." -ForegroundColor Green
+              Write-Host "SUCCESS: Certificate added without errors. The issue might be resolved." -ForegroundColor Green
           }
           catch [System.Security.Cryptography.CryptographicException] {
-              Write-Host "BUG REPRODUCED: CryptographicException intercepted!" -ForegroundColor Red
-              Write-Host "Exception Message: $($_.Exception.Message)" -ForegroundColor Yellow
-              Write-Host "HRESULT Code: $('0x{0:X}' -f $_.Exception.HResult)" -ForegroundColor Red
+              Write-Host "CAUGHT EXPECTED ERROR:" -ForegroundColor Red
+              Write-Host $_.Exception.Message -ForegroundColor Red
               
-              # Force step failure to mark workflow red if the expected Access Denied issue occurs
-              if ($_.Exception.HResult -eq 0x80070005 -or $_.Exception.Message -like "*Access is denied*") {
-                  throw "Expected Failure Detected: CurrentUser/TrustedPublisher store write access is restricted (0x80070005)."
+              # Extract the HRESULT to verify it matches 0x80070005
+              $hresult = "0x{0:X8}" -f $_.Exception.HResult
+              Write-Host "HRESULT: $hresult" -ForegroundColor Red
+              
+              if ($hresult -eq "0x80070005") {
+                  Write-Host "CRITICAL: Successfully reproduced 0x80070005 (Access Denied)!" -ForegroundColor Yellow
               } else {
-                  throw $_.Exception
+                  Write-Host "Failed with a different HRESULT: $hresult" -ForegroundColor Orange
+                  exit 1
               }
           }
           finally {
-              if ($null -ne $store) { $store.Close() }
-          }
-
-      - name: Diagnostic Snapshot (Post-Execution)
-        if: always() # Ensures logs run even when the script fails
-        shell: pwsh
-        run: |
-          Write-Host "=== Analyzing Underlying Registry Layout ===" -ForegroundColor Cyan
-          
-          # Confirm whether the registry pathways are missing entirely as specified in the issue
-          $paths = @(
-              "HKCU:\Software\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKLM:\Software\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher"
-          )
-          
-          foreach ($path in $paths) {
-              $exists = Test-Path $path
-              Write-Host "Path structure exists for [$path]: $exists" -ForegroundColor ($exists ? "Green" : "Yellow")
+              # Clean up the store connection and the transient certificate
+              $store.Close()
+              Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
           }
