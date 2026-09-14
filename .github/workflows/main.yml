@@ -1,52 +1,105 @@
 name: Repro Issue 14728
 
 on:
-  workflow_dispatch: # Allows manual triggering for testing
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
 
 jobs:
-  reproduce-error:
+  repro-trusted-publisher:
     runs-on: windows-11-arm
     steps:
-      - name: Attempt X509Store.Add to CurrentUser TrustedPublisher
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Diagnostic - Check Current User and Registry State
         shell: pwsh
         run: |
-          # 1. Create a transient self-signed certificate in memory
-          Write-Host "Creating a transient self-signed certificate..."
-          $cert = New-SelfSignedCertificate -Subject "CN=Repro14728" -CertStoreLocation "Cert:\CurrentUser\My"
+          echo "=== Current User Context ==="
+          [Security.Principal.WindowsIdentity]::GetCurrent().Name
           
-          # 2. Open the CurrentUser TrustedPublisher store with ReadWrite permissions
-          Write-Host "Opening X509Store (TrustedPublisher, CurrentUser) in ReadWrite mode..."
-          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-              [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
-              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+          echo "=== Checking Elevation State ==="
+          $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          echo "Is Elevated: $isAdmin"
+
+          echo "=== Inspecting Existing Registry Keys ==="
+          $paths = @(
+              "HKCU:\Software\Microsoft\SystemCertificates\TrustedPublisher",
+              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher",
+              "HKLM:\Software\Microsoft\SystemCertificates\TrustedPublisher"
           )
-          
-          try {
-              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              
-              # 3. Attempt to add the certificate to reproduce the 0x80070005 Access Denied error
-              Write-Host "Attempting to add the certificate..."
-              $store.Add($cert)
-              
-              Write-Host "SUCCESS: Certificate added without errors. The issue might be resolved." -ForegroundColor Green
-          }
-          catch [System.Security.Cryptography.CryptographicException] {
-              Write-Host "CAUGHT EXPECTED ERROR:" -ForegroundColor Red
-              Write-Host $_.Exception.Message -ForegroundColor Red
-              
-              # Extract the HRESULT to verify it matches 0x80070005
-              $hresult = "0x{0:X8}" -f $_.Exception.HResult
-              Write-Host "HRESULT: $hresult" -ForegroundColor Red
-              
-              if ($hresult -eq "0x80070005") {
-                  Write-Host "CRITICAL: Successfully reproduced 0x80070005 (Access Denied)!" -ForegroundColor Yellow
+          foreach ($path in $paths) {
+              if (Test-Path $path) {
+                  Write-Host "Found: $path"
               } else {
-                  Write-Host "Failed with a different HRESULT: $hresult" -ForegroundColor Orange
-                  exit 1
+                  Write-Host "Missing: $path"
               }
           }
-          finally {
-              # Clean up the store connection and the transient certificate
-              $store.Close()
-              Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -ErrorAction SilentlyContinue
+
+      - name: Generate Dummy Code-Signing Certificate
+        shell: pwsh
+        run: |
+          echo "Creating an ephemeral self-signed code signing certificate..."
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Repro-Issue-14728" -CertStoreLocation "Cert:\CurrentUser\My"
+          echo "Cert Thumbprint: $($cert.Thumbprint)"
+          echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      - name: Attempt Reproduction via .NET Inline Script
+        shell: pwsh
+        run: |
+          $code = @"
+          using System;
+          using System.Security.Cryptography.X509Certificates;
+
+          class Program {
+              static void Main(string[] args) {
+                  string thumbprint = args[0];
+                  Console.WriteLine($"Looking for certificate: {thumbprint}");
+                  
+                  using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
+                      myStore.Open(OpenFlags.ReadOnly);
+                      X509Certificate2Collection matches = myStore.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
+                      
+                      if (matches.Count == 0) {
+                          Console.WriteLine("Error: Source certificate not found in CurrentUser\\My.");
+                          Environment.Exit(1);
+                      }
+                      
+                      X509Certificate2 cert = matches[0];
+                      
+                      try {
+                          Console.WriteLine("Attempting to open CurrentUser\\TrustedPublisher ReadWrite...");
+                          using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
+                              pubStore.Open(OpenFlags.ReadWrite);
+                              Console.WriteLine("Store opened successfully. Attempting to Add certificate...");
+                              pubStore.Add(cert);
+                              Console.WriteLine("Success: Certificate added without 0x80070005.");
+                          }
+                      }
+                      catch (Exception ex) {
+                          Console.WriteLine("REPRODUCED EXCEPTION:");
+                          Console.WriteLine(ex.ToString());
+                          if (ex.InnerException != null) {
+                              Console.WriteLine($"Inner Exception: {ex.InnerException.Message}");
+                          }
+                          // Exit with a specific code if we see Access Denied
+                          if (ex.Message.Contains("0x80070005") || ex.HResult == unchecked((int)0x80070005)) {
+                              Environment.Exit(42); 
+                          }
+                      }
+                  }
+              }
           }
+          "@
+          
+          $code | Out-File -FilePath Repro.cs -Encoding utf8
+          
+          echo "Compiling tester executable..."
+          dotnet new console -n ReproApp -o . --force
+          Move-Item -Path Repro.cs -Destination Program.cs -Force
+          dotnet run -- ${{ env.CERT_THUMBPRINT }}
+
+      - name: Post-Run Registry Verification
+        if: always()
+        shell: pwsh
+        run: |
+          echo "=== Post-Execution Registry Check ==="
+          Get-ChildItem -Path "HKCU:\Software\Microsoft\SystemCertificates\" -ErrorAction SilentlyContinue | Select-Object Name
