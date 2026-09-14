@@ -1,141 +1,81 @@
-name: Repro Issue 14728 - TrustedPublisher Access Denied
+name: Repro Issue 14728 (TrustedPublisher Add Error)
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch: # Allows you to manually trigger the test from the GitHub Actions UI
 
 jobs:
-  reproduce-bug:
-    
-    runs-on: windows-11-arm
-    
+  reproduce-error:
+    # Strictly targets the specific test image identified in the issue
+    runs-on: windows-11-arm 
+
     steps:
-      - name: Verify Execution Environment
+      - name: Check Environment Context
         shell: pwsh
         run: |
-          Write-Host "OS Architecture: $env:PROCESSOR_ARCHITECTURE"
-          Write-Host "Current .NET Version:"
-          dotnet --version
-          Write-Host "Verifying Administrative Privileges (High Integrity):"
-          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-          $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          Write-Host "Is Administrator? $isAdmin"
+          Write-Host "=== System Information ===" -ForegroundColor Cyan
+          Write-Host "OS Caption: $((Get-WmiObject Win32_OperatingSystem).Caption)"
+          Write-Host "Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "PowerShell Version: $PSVersionTable.PSVersion"
+          Write-Host ".NET Runtime Version: $(dotnet --version 2>$null || echo 'Not installed/Not found')"
+          
+          # Verify High Integrity / Admin rights matching runneradmin context
+          $isAdmin = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "Running with Elevated Administrator Privileges: $isAdmin" -ForegroundColor ($isAdmin ? "Green" : "Red")
 
-      - name: Create .NET Reproduction Script
+      - name: Run .NET X509Store Mutation Test
         shell: pwsh
         run: |
-          $csharpCode = @"
-          using System;
-          using System.Security.Cryptography;
-          using System.Security.Cryptography.X509Certificates;
-
-          class Program
-          {
-              static int Main()
-              {
-                  try
-                  {
-                      Console.WriteLine("Initializing TrustedPublisher store for CurrentUser...");
-                      using (X509Store store = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser))
-                      {
-                          Console.WriteLine("Opening store in ReadWrite mode...");
-                          store.Open(OpenFlags.ReadWrite);
-
-                          Console.WriteLine("Generating a temporary self-signed test certificate...");
-                          using (RSA rsa = RSA.Create(2048))
-                          {
-                              CertificateRequest request = new CertificateRequest(
-                                  "CN=ReproBug14728", 
-                                  rsa, 
-                                  HashName.SHA256, 
-                                  RSASignaturePadding.Pkcs1
-                              );
-                              
-                              using (X509Certificate2 cert = request.CreateSelfSigned(
-                                  DateTimeOffset.UtcNow.AddDays(-1), 
-                                  DateTimeOffset.UtcNow.AddDays(1)))
-                              {
-                                  Console.WriteLine($"Attempting to add certificate (Thumbprint: {cert.Thumbprint})...");
-                                  
-                                  // Execution is expected to fail exactly here with 0x80070005
-                                  store.Add(cert); 
-                                  
-                                  Console.ForegroundColor = ConsoleColor.Green;
-                                  Console.WriteLine("SUCCESS: The certificate was added. The bug is not present.");
-                                  Console.ResetColor();
-                                  return 0; 
-                              }
-                          }
-                      }
-                  }
-                  catch (CryptographicException ex)
-                  {
-                      Console.ForegroundColor = ConsoleColor.Red;
-                      Console.WriteLine("\n[REPRODUCTION CONFIRMED] Expected error intercepted!");
-                      Console.WriteLine($"Error Message: {ex.Message}");
-                      Console.WriteLine($"HRESULT: 0x{ex.HResult:X8}");
-                      Console.ResetColor();
-                      
-                      if (ex.HResult == unchecked((int)0x80070005))
-                      {
-                          // If the error is exactly Access Denied (0x80070005), the repro is a success
-                          return 42; 
-                      }
-                      return 1;
-                  }
-                  catch (Exception ex)
-                  {
-                      Console.WriteLine($"Unexpected error: {ex}");
-                      return 1;
-                  }
+          Write-Host "=== Beginning Mutation Test ===" -ForegroundColor Cyan
+          
+          # 1. Generate an in-memory dummy self-signed certificate
+          $cert = New-SelfSignedCertificate -Subject "CN=ReproBug14728" -CertStoreLocation "Cert:\CurrentUser\My"
+          Write-Host "Temporary Certificate Generated: $($cert.Thumbprint)"
+          
+          # 2. Attempt programmatic initialization and write behavior via official .NET APIs
+          try {
+              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                  [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+                  [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
+              )
+              
+              Write-Host "Opening CurrentUser/TrustedPublisher store in ReadWrite mode..."
+              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              
+              Write-Host "Attempting to add the certificate to the store..."
+              $store.Add($cert)
+              
+              Write-Host "SUCCESS: Certificate mutated into store. The bug did not manifest." -ForegroundColor Green
+          }
+          catch [System.Security.Cryptography.CryptographicException] {
+              Write-Host "BUG REPRODUCED: CryptographicException intercepted!" -ForegroundColor Red
+              Write-Host "Exception Message: $($_.Exception.Message)" -ForegroundColor Yellow
+              Write-Host "HRESULT Code: $('0x{0:X}' -f $_.Exception.HResult)" -ForegroundColor Red
+              
+              # Force step failure to mark workflow red if the expected Access Denied issue occurs
+              if ($_.Exception.HResult -eq 0x80070005 -or $_.Exception.Message -like "*Access is denied*") {
+                  throw "Expected Failure Detected: CurrentUser/TrustedPublisher store write access is restricted (0x80070005)."
+              } else {
+                  throw $_.Exception
               }
           }
-          "@
-          Set-Content -Path "Repro.cs" -Value $csharpCode
+          finally {
+              if ($null -ne $store) { $store.Close() }
+          }
 
-      - name: Setup Temporary .NET Console Project
+      - name: Diagnostic Snapshot (Post-Execution)
+        if: always() # Ensures logs run even when the script fails
         shell: pwsh
         run: |
-          dotnet new console -n ReproProject --force
-          Move-Item -Path "Repro.cs" -Destination "ReproProject/Program.cs" -Force
-
-      - name: Execute Reproduction Test
-        id: run_repro
-        shell: pwsh
-        continue-on-error: true # Continues workflow so registry analysis runs even after script failure
-        run: |
-          cd ReproProject
-          dotnet run
-          $exitCode = $LASTEXITCODE
-          Write-Host "Reproduction script exit code: $exitCode"
-          echo "repro_code=$exitCode" >> $env:GITHUB_OUTPUT
-
-      - name: Windows Registry Inspection (Post-Failure Diagnostic)
-        if: always()
-        shell: pwsh
-        run: |
-          Write-Host "=== Analyzing Registry Keys (CurrentUser and LocalMachine) ==="
+          Write-Host "=== Analyzing Underlying Registry Layout ===" -ForegroundColor Cyan
+          
+          # Confirm whether the registry pathways are missing entirely as specified in the issue
           $paths = @(
               "HKCU:\Software\Microsoft\SystemCertificates\TrustedPublisher",
               "HKLM:\Software\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKLM:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher"
+              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher"
           )
+          
           foreach ($path in $paths) {
-              if (Test-Path $path) {
-                  Write-Host "[PRESENT] $path"
-              } else {
-                  Write-Host "[ABSENT]  $path"
-              }
-          }
-
-      - name: Validate Final Test Status
-        shell: pwsh
-        run: |
-          $code = "${{ steps.run_repro.outputs.repro_code }}"
-          if ($code -eq "42") {
-              Write-Host "The workflow successfully reproduced the 0x80070005 (Access Denied) bug."
-          } else {
-              Write-Error "Reproduction failed. Image behavior might be different or fixed (Exit code: $code)."
-              exit 1
+              $exists = Test-Path $path
+              Write-Host "Path structure exists for [$path]: $exists" -ForegroundColor ($exists ? "Green" : "Yellow")
           }
