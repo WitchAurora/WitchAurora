@@ -5,7 +5,7 @@ on:
 
 jobs:
   reinstall-brew:
-    runs-on: macos-26  # Updated to a valid GitHub-hosted runner version for Intel
+    runs-on: macos-26-intel  # Valid Intel runner
 
     steps:
       - name: Checkout repository
@@ -20,26 +20,19 @@ jobs:
         run: |
           echo "Purging leftover directories..."
           sudo rm -rf /usr/local/Homebrew /usr/local/Caskroom /usr/local/Cellar /usr/local/var/homebrew
-          sudo rm -rf /opt/homebrew/*
 
-      - name: Download and Install Homebrew via .pkg
+      - name: Install Homebrew via Shell Script (Intel)
         run: |
-          echo "Downloading Homebrew package..."
-          curl -L -o Homebrew.pkg https://github.com/Homebrew/brew/releases/download/7.0.1/Homebrew.pkg
-          
-          echo "Installing package..."
-          sudo installer -pkg Homebrew.pkg -target /
-          
-          # Clean up downloaded installer
-          rm Homebrew.pkg
+          echo "Installing Homebrew for Intel..."
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
       - name: Verify installation
         run: |
-          # Add brew to PATH for runner shell session
+          # Add brew to PATH for Intel runner shell session
           echo "/usr/local/bin" >> $GITHUB_PATH
           echo "/usr/local/sbin" >> $GITHUB_PATH
           
-          # Force ownership to the current runner user just in case
+          # Force ownership to the current runner user
           sudo chown -R $USER:admin /usr/local/Homebrew
           
           brew --version
