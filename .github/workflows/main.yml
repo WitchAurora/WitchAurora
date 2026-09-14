@@ -1,50 +1,35 @@
-name: Repro Issue 14728
+name: Repro Issue 14728 - Clean
 
 on:
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
-  repro-trusted-publisher:
+  repro-exact:
     runs-on: windows-11-arm
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Diagnostic - Check Current User and Registry State
+      - name: Generate and Install Baseline Certificate
         shell: pwsh
         run: |
-          echo "=== Current User Context ==="
-          [Security.Principal.WindowsIdentity]::GetCurrent().Name
-          
-          echo "=== Checking Elevation State ==="
-          $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          echo "Is Elevated: $isAdmin"
+          # 1. Generate a standard code-signing certificate in the user context
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject "CN=Authenticode Test Publisher" `
+            -KeyUsage DigitalSignature `
+            -FriendlyName "Repro 14728 Baseline" `
+            -CertStoreLocation "Cert:\CurrentUser\My"
 
-          echo "=== Inspecting Existing Registry Keys ==="
-          $paths = @(
-              "HKCU:\Software\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher",
-              "HKLM:\Software\Microsoft\SystemCertificates\TrustedPublisher"
-          )
-          foreach ($path in $paths) {
-              if (Test-Path $path) {
-                  Write-Host "Found: $path"
-              } else {
-                  Write-Host "Missing: $path"
-              }
-          }
+          # 2. Replicate issue conditions: copy it to Root as seen in the bug report
+          $rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root", "CurrentUser")
+          $rootStore.Open("ReadWrite")
+          $rootStore.Add($cert)
+          $rootStore.Close()
 
-      - name: Generate Dummy Code-Signing Certificate
-        shell: pwsh
-        run: |
-          echo "Creating an ephemeral self-signed code signing certificate..."
-          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Repro-Issue-14728" -CertStoreLocation "Cert:\CurrentUser\My"
-          echo "Cert Thumbprint: $($cert.Thumbprint)"
           echo "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+          Write-Host "Injected certificate into My and Root stores. Thumbprint: $($cert.Thumbprint)"
 
-      - name: Attempt Reproduction via .NET Inline Script
+      - name: Execute Native .NET App (X509Store.Add)
         shell: pwsh
         run: |
+          # Build a clean native .NET app targeting the exact API call
           $code = @"
           using System;
           using System.Security.Cryptography.X509Certificates;
@@ -52,54 +37,47 @@ jobs:
           class Program {
               static void Main(string[] args) {
                   string thumbprint = args[0];
-                  Console.WriteLine($"Looking for certificate: {thumbprint}");
                   
                   using (X509Store myStore = new X509Store(StoreName.My, StoreLocation.CurrentUser)) {
                       myStore.Open(OpenFlags.ReadOnly);
                       X509Certificate2Collection matches = myStore.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
                       
                       if (matches.Count == 0) {
-                          Console.WriteLine("Error: Source certificate not found in CurrentUser\\My.");
+                          Console.WriteLine("Error: Source certificate not found.");
                           Environment.Exit(1);
                       }
                       
-                      X509Certificate2 cert = matches[0];
+                      X509Certificate2 targetCert = matches[0];
                       
                       try {
                           Console.WriteLine("Attempting to open CurrentUser\\TrustedPublisher ReadWrite...");
                           using (X509Store pubStore = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser)) {
                               pubStore.Open(OpenFlags.ReadWrite);
-                              Console.WriteLine("Store opened successfully. Attempting to Add certificate...");
-                              pubStore.Add(cert);
-                              Console.WriteLine("Success: Certificate added without 0x80070005.");
+                              
+                              Console.WriteLine("Attempting to Add the certificate to TrustedPublisher...");
+                              pubStore.Add(targetCert);
+                              
+                              Console.WriteLine("SUCCESS: Certificate added. The bug did not reproduce.");
                           }
                       }
                       catch (Exception ex) {
-                          Console.WriteLine("REPRODUCED EXCEPTION:");
+                          Console.WriteLine("=== BUG REPRODUCTION DETECTED ===");
                           Console.WriteLine(ex.ToString());
-                          if (ex.InnerException != null) {
-                              Console.WriteLine($"Inner Exception: {ex.InnerException.Message}");
+                          
+                          if (ex.HResult == unchecked((int)0x80070005)) {
+                              Console.WriteLine("Confirmed Error Code: 0x80070005 (Access is Denied).");
+                              Environment.Exit(0); // Exit clean because we caught the expected platform bug
                           }
-                          // Exit with a specific code if we see Access Denied
-                          if (ex.Message.Contains("0x80070005") || ex.HResult == unchecked((int)0x80070005)) {
-                              Environment.Exit(42); 
-                          }
+                          Environment.Exit(1);
                       }
                   }
               }
           }
           "@
           
-          $code | Out-File -FilePath Repro.cs -Encoding utf8
-          
-          echo "Compiling tester executable..."
-          dotnet new console -n ReproApp -o . --force
-          Move-Item -Path Repro.cs -Destination Program.cs -Force
+          # Compile and run natively
+          $code | Out-File -FilePath Program.cs -Encoding utf8
+          dotnet new console --force --name ReproRunner
+          Move-Item -Path Program.cs -Destination ReproRunner\Program.cs -Force
+          cd ReproRunner
           dotnet run -- ${{ env.CERT_THUMBPRINT }}
-
-      - name: Post-Run Registry Verification
-        if: always()
-        shell: pwsh
-        run: |
-          echo "=== Post-Execution Registry Check ==="
-          Get-ChildItem -Path "HKCU:\Software\Microsoft\SystemCertificates\" -ErrorAction SilentlyContinue | Select-Object Name
