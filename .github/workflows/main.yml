@@ -36,7 +36,9 @@ jobs:
                               DateTimeOffset.UtcNow.AddYears(1));
 
                           byte[] pfxBytes = cert.Export(X509ContentType.Pfx, "password");
-                          X509Certificate2 persistentCert = new X509Certificate2(pfxBytes, "password", X509KeyStorageFlags.UserKeySet);
+                          
+                          // Modern .NET factory implementation replacing the obsolete constructor
+                          X509Certificate2 persistentCert = X509CertificateLoader.LoadPkcs12(pfxBytes, "password", X509KeyStorageFlags.UserKeySet);
 
                           Console.WriteLine($"[OK] Ephemeral Certificate generated. Thumbprint: {persistentCert.Thumbprint}");
 
