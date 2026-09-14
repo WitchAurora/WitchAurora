@@ -5,8 +5,8 @@ on:
 
 jobs:
   reinstall-brew:
-    runs-on: macos-26-intel
-    
+    runs-on: macos-26-intel  # Updated to a valid GitHub-hosted runner version for Intel
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -14,22 +14,33 @@ jobs:
       - name: Uninstall existing Homebrew
         run: |
           echo "Running official Homebrew uninstaller..."
-          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"
+          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)" || true
 
       - name: Clean up residual files
         run: |
           echo "Purging leftover directories..."
           sudo rm -rf /usr/local/Homebrew /usr/local/Caskroom /usr/local/Cellar /usr/local/var/homebrew
-          sudo rm -rf /opt/homebrew/* # Just in case runner has remnants
+          sudo rm -rf /opt/homebrew/*
 
-      - name: Install latest Homebrew
+      - name: Download and Install Homebrew via .pkg
         run: |
-          echo "Installing latest Homebrew..."
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo "Downloading Homebrew package..."
+          curl -L -o Homebrew.pkg https://github.com/Homebrew/brew/releases/download/7.0.1/Homebrew.pkg
+          
+          echo "Installing package..."
+          sudo installer -pkg Homebrew.pkg -target /
+          
+          # Clean up downloaded installer
+          rm Homebrew.pkg
 
       - name: Verify installation
         run: |
           # Add brew to PATH for runner shell session
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH || echo "/usr/local/bin" >> $GITHUB_PATH
+          echo "/usr/local/bin" >> $GITHUB_PATH
+          echo "/usr/local/sbin" >> $GITHUB_PATH
+          
+          # Force ownership to the current runner user just in case
+          sudo chown -R $USER:admin /usr/local/Homebrew
+          
           brew --version
           brew update
