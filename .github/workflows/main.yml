@@ -1,30 +1,141 @@
-name: Diagnostic PowerShell Image
+name: Repro Issue 14728 - TrustedPublisher Access Denied
 
-on: [workflow_dispatch] # Permet le déclenchement manuel depuis l'onglet Actions
+on:
+  workflow_dispatch: # Allows you to trigger the reproduction manually from the Actions tab
 
 jobs:
-  check-powershell:
-    runs-on: windows-2025 # Cible l'image Windows Server 2025
-
+  reproduce-bug:
+    # Forces execution on the affected ARM64 environment
+    runs-on: windows-11-arm
+    
     steps:
-      - name: 'Étape 1 : Vérification de la version active'
+      - name: Verify Execution Environment
         shell: pwsh
         run: |
-          Write-Host "=== Version système par défaut ==="
-          $PSVersionTable
-          
-          Write-Host "`n=== Version brute de pwsh ==="
-          pwsh --version
+          Write-Host "OS Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "Current .NET Version:"
+          dotnet --version
+          Write-Host "Verifying Administrative Privileges (High Integrity):"
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "Is Administrator? $isAdmin"
 
-      - name: 'Étape 2 : Inspection des dossiers système'
+      - name: Create .NET Reproduction Script
         shell: pwsh
         run: |
-          Write-Host "=== Emplacement du binaire ==="
-          Get-Command pwsh | Select-Object Name, Source
-          
-          Write-Host "`n=== Versions sur le disque (C:\Program Files\PowerShell) ==="
-          if (Test-Path "C:\Program Files\PowerShell") {
-              Get-ChildItem "C:\Program Files\PowerShell" | Select-Object Name, FullName
+          $csharpCode = @"
+          using System;
+          using System.Security.Cryptography;
+          using System.Security.Cryptography.X509Certificates;
+
+          class Program
+          {
+              static int Main()
+              {
+                  try
+                  {
+                      Console.WriteLine("Initializing TrustedPublisher store for CurrentUser...");
+                      using (X509Store store = new X509Store(StoreName.TrustedPublisher, StoreLocation.CurrentUser))
+                      {
+                          Console.WriteLine("Opening store in ReadWrite mode...");
+                          store.Open(OpenFlags.ReadWrite);
+
+                          Console.WriteLine("Generating a temporary self-signed test certificate...");
+                          using (RSA rsa = RSA.Create(2048))
+                          {
+                              CertificateRequest request = new CertificateRequest(
+                                  "CN=ReproBug14728", 
+                                  rsa, 
+                                  HashName.SHA256, 
+                                  RSASignaturePadding.Pkcs1
+                              );
+                              
+                              using (X509Certificate2 cert = request.CreateSelfSigned(
+                                  DateTimeOffset.UtcNow.AddDays(-1), 
+                                  DateTimeOffset.UtcNow.AddDays(1)))
+                              {
+                                  Console.WriteLine($"Attempting to add certificate (Thumbprint: {cert.Thumbprint})...");
+                                  
+                                  // Execution is expected to fail exactly here with 0x80070005
+                                  store.Add(cert); 
+                                  
+                                  Console.ForegroundColor = ConsoleColor.Green;
+                                  Console.WriteLine("SUCCESS: The certificate was added. The bug is not present.");
+                                  Console.ResetColor();
+                                  return 0; 
+                              }
+                          }
+                      }
+                  }
+                  catch (CryptographicException ex)
+                  {
+                      Console.ForegroundColor = ConsoleColor.Red;
+                      Console.WriteLine("\n[REPRODUCTION CONFIRMED] Expected error intercepted!");
+                      Console.WriteLine($"Error Message: {ex.Message}");
+                      Console.WriteLine($"HRESULT: 0x{ex.HResult:X8}");
+                      Console.ResetColor();
+                      
+                      if (ex.HResult == unchecked((int)0x80070005))
+                      {
+                          // If the error is exactly Access Denied (0x80070005), the repro is a success
+                          return 42; 
+                      }
+                      return 1;
+                  }
+                  catch (Exception ex)
+                  {
+                      Console.WriteLine($"Unexpected error: {ex}");
+                      return 1;
+                  }
+              }
+          }
+          "@
+          Set-Content -Path "Repro.cs" -Value $csharpCode
+
+      - name: Setup Temporary .NET Console Project
+        shell: pwsh
+        run: |
+          dotnet new console -n ReproProject --force
+          Move-Item -Path "Repro.cs" -Destination "ReproProject/Program.cs" -Force
+
+      - name: Execute Reproduction Test
+        id: run_repro
+        shell: pwsh
+        continue-on-error: true # Continues workflow so registry analysis runs even after script failure
+        run: |
+          cd ReproProject
+          dotnet run
+          $exitCode = $LASTEXITCODE
+          Write-Host "Reproduction script exit code: $exitCode"
+          echo "repro_code=$exitCode" >> $env:GITHUB_OUTPUT
+
+      - name: Windows Registry Inspection (Post-Failure Diagnostic)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== Analyzing Registry Keys (CurrentUser and LocalMachine) ==="
+          $paths = @(
+              "HKCU:\Software\Microsoft\SystemCertificates\TrustedPublisher",
+              "HKLM:\Software\Microsoft\SystemCertificates\TrustedPublisher",
+              "HKCU:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher",
+              "HKLM:\Software\Policies\Microsoft\SystemCertificates\TrustedPublisher"
+          )
+          foreach ($path in $paths) {
+              if (Test-Path $path) {
+                  Write-Host "[PRESENT] $path"
+              } else {
+                  Write-Host "[ABSENT]  $path"
+              }
+          }
+
+      - name: Validate Final Test Status
+        shell: pwsh
+        run: |
+          $code = "${{ steps.run_repro.outputs.repro_code }}"
+          if ($code -eq "42") {
+              Write-Host "The workflow successfully reproduced the 0x80070005 (Access Denied) bug."
           } else {
-              Write-Warning "Le dossier C:\Program Files\PowerShell est introuvable."
+              Write-Error "Reproduction failed. Image behavior might be different or fixed (Exit code: $code)."
+              exit 1
           }
