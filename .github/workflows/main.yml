@@ -1,70 +1,96 @@
-name: Reinstall Homebrew Workflow
+name: Create and Run install-homebrew.sh on Intel
 
 on:
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  reinstall-brew:
-    runs-on: macos-26-intel  # Apple Silicon runner (arm64)
+  run-script:
+    runs-on: macos-26-intel
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Uninstall existing Homebrew
+      - name: Create install-homebrew.sh
         run: |
-          echo "Running official Homebrew uninstaller..."
-          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)" || true
+          cat << 'EOF' > install-homebrew.sh
+          #!/bin/bash -e -o pipefail
+          ################################################################################
+          ##  File:   install-homebrew.sh
+          ##  Desc:   Install Homebrew
+          ################################################################################
 
-      - name: Clean up residual files
-        run: |
-          echo "Purging leftover directories..."
-          sudo rm -rf /opt/homebrew/*
-          sudo rm -rf /usr/local/Homebrew /usr/local/Caskroom /usr/local/Cellar /usr/local/var/homebrew
+          source ~/utils/utils.sh
 
-      - name: Download and verify package is Apple Silicon only
-        run: |
-          echo "Downloading Homebrew package..."
-          curl -L -o Homebrew.pkg https://github.com/Homebrew/brew/releases/download/7.0.1/Homebrew.pkg
-          
-          echo "Extracting package contents to inspect target architecture..."
-          mkdir -p pkg_contents
-          # Flat packages can be expanded using xar
-          xar -xf Homebrew.pkg -C pkg_contents
-          
-          # Look for the Distribution script or component plist where CPU architecture is enforced
-          if [ -f "pkg_contents/Distribution" ]; then
-            echo "Analyzing Distribution script for architecture rules..."
-            cat pkg_contents/Distribution
-            
-            # Check if it explicitly restricts installation to arm64 or checks for Apple Silicon
-            if grep -q "arm64" pkg_contents/Distribution || grep -q "cpu.arch" pkg_contents/Distribution; then
-              echo "Verification passed: Package contains Apple Silicon (arm64) architecture requirements."
-            else
-              echo "Warning: Could not explicitly confirm arm64 restriction in Distribution script, proceeding with caution."
-            fi
-          else
-            echo "Distribution file not found directly, checking component plists..."
+          arch=$(get_arch)
+
+          echo "Installing Homebrew..."
+          homebrew_installer_path=$(download_with_retry "https://raw.githubusercontent.com/Homebrew/install/master/install.sh")
+          /bin/bash $homebrew_installer_path
+
+          if [[ $arch == "arm64" ]]; then
+            /opt/homebrew/bin/brew update
+            /opt/homebrew/bin/brew upgrade
+            /opt/homebrew/bin/brew upgrade --cask
+            /opt/homebrew/bin/brew cleanup
+            eval "$(/opt/homebrew/bin/brew shellenv)"
           fi
-          
-          # Clean up extracted files
-          rm -rf pkg_contents
 
-      - name: Install Homebrew via .pkg
-        run: |
-          echo "Installing package..."
-          sudo installer -pkg Homebrew.pkg -target /
-                    
-          # Clean up downloaded installer
-          rm Homebrew.pkg
+          git clone https://github.com/Homebrew/homebrew-cask $(brew --repository)/Library/Taps/homebrew/homebrew-cask --origin=origin --template= --config core.fsmonitor=false --depth 1
+          git clone https://github.com/Homebrew/homebrew-core $(brew --repository)/Library/Taps/homebrew/homebrew-core --origin=origin --template= --config core.fsmonitor=false --depth 1
 
-      - name: Verify installation
+          brew tap homebrew/cask
+          brew tap homebrew/core
+
+          echo "Disabling Homebrew analytics..."
+          brew analytics off
+
+          # jq is required for further installation scripts
+          echo "Installing jq..."
+          brew_smart_install jq
+
+          echo "Installing curl..."
+          if ! is_Arm64; then
+              # For the Intel images curl dependency openssl@3 stopped to work, using pinned commit
+              COMMIT=ac0bc95fef0e5aed25b3662f6271020410cfbc3d
+              FILE_NAME="o/openssl@3.rb"
+              FORMULA_NAME="openssl@3"
+              brew_install_pinned_formula "$FORMULA_NAME" "$FILE_NAME" "$COMMIT"
+          fi
+          brew_smart_install curl
+
+          echo "Installing wget..."
+          brew_smart_install "wget"
+          EOF
+
+      - name: Create Mock Utils Environment
         run: |
-          # Add brew to PATH for runner shell session
-          echo "/opt/homebrew/bin" >> $GITHUB_PATH
-          echo "/opt/homebrew/sbin" >> $GITHUB_PATH
-                    
-          # Force ownership to the current runner user just in case
-          sudo chown -R $USER:admin /opt/homebrew
-                    
-          brew --version
-          brew update
+          mkdir -p ~/utils
+          cat << 'EOF' > ~/utils/utils.sh
+          get_arch() {
+            echo "x86_64"
+          }
+          is_Arm64() {
+            return 1
+          }
+          download_with_retry() {
+            local url="$1"
+            curl -fsSL "$url" -o /tmp/install.sh
+            echo "/tmp/install.sh"
+          }
+          brew_smart_install() {
+            brew install "$1"
+          }
+          brew_install_pinned_formula() {
+            local formula="$1"
+            local file="$2"
+            local commit="$3"
+            brew install "https://raw.githubusercontent.com/Homebrew/homebrew-core/$commit/$file"
+          }
+          export -f get_arch is_Arm64 download_with_retry brew_smart_install brew_install_pinned_formula
+          EOF
+
+      - name: Execute install-homebrew.sh
+        run: |
+          chmod +x ./install-homebrew.sh
+          ./install-homebrew.sh
