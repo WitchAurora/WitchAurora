@@ -1,29 +1,24 @@
-name: Intel macOS Homebrew Workflow
+name: setup-node
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  brew-workflow:
-    runs-on: macos-15-intel
+  test:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        node-version: ['24.x', '24', '']
+        os: [ubuntu-slim, ubuntu-latest]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Perform Brew Update
-        run: |
-          brew update-reset || brew update
-
-      - name: Run Brew Workflow Tasks
-        run: |
-          brew upgrade
-          # Add your custom brew commands here (e.g., brew install <package>)
-
-      - name: Cleanup Homebrew Cache
-        run: |
-          brew cleanup --prune=all
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+      
+      - run: node -v
