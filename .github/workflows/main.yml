@@ -1,26 +1,29 @@
-name: Install Homebrew via master script
+name: Intel macOS Homebrew Workflow
 
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-26-intel  # Intel macOS runner
+  brew-workflow:
+    runs-on: macos-15-large
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Homebrew using raw script
+      - name: Perform Brew Update
         run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install.sh)"
+          brew update-reset || brew update
 
-      - name: Configure PATH for Intel Mac
+      - name: Run Brew Workflow Tasks
         run: |
-          echo 'eval "$(/usr/local/bin/brew shellenv)"' >> ~/.zprofile
-          eval "$(/usr/local/bin/brew shellenv)"
+          brew upgrade
+          # Add your custom brew commands here (e.g., brew install <package>)
 
-      - name: Verify Installation
+      - name: Cleanup Homebrew Cache
         run: |
-          brew --version
+          brew cleanup --prune=all
